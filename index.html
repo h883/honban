@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>コインアリーナ  - 対戦シューター</title>
+<title>コインアリーナ 3D - P2P対戦シューター</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#070b18;font-family:"Segoe UI",sans-serif;color:#fff;}
@@ -541,6 +541,8 @@ const FIREBASE_CONFIG={
   appId:"1:532952437299:web:e9f7f9acf353c9defcc946",
   measurementId:"G-2V8RTD8F2S"
 };
+// App Check（reCAPTCHA v3）サイトキーを入れると、アプリ以外からのDB操作をブロック（空なら無効）
+const APPCHECK_SITE_KEY='';
 let fb=null, saveTO=null;
 let account=null, profile={score:0,kills:0,wins:0}, lastMyScore=0, profDirty=false, profSaveT=4;
 let camYaw=Math.PI/2, camPitch=0.25;
@@ -558,6 +560,9 @@ try{ const s=JSON.parse(localStorage.getItem('ca3d_settings')||'{}');
 function saveSettings(){ try{ localStorage.setItem('ca3d_settings',JSON.stringify({binds,sens,invertY})); }catch(e){} }
 
 const $=id=>document.getElementById(id); const now=()=>performance.now()/1000;
+// HTMLエスケープ（XSS対策：他人の名前/IDをinnerHTMLに出す時に必ず通す）
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function cleanName(s){ return String(s==null?'':s).replace(/[\x00-\x1f<>]/g,'').slice(0,16) || 'Player'; }
 const r1=n=>Math.round(n*10)/10;
 addEventListener('keydown',e=>{ if(rebinding){ e.preventDefault(); if(e.code!=='Escape'){ binds[rebinding]=e.code; saveSettings(); } rebinding=null; renderBinds(); return; }
   keys[e.code]=true; if(e.code===binds.jump||e.code==='Space')e.preventDefault(); ac(); });
@@ -588,7 +593,7 @@ function colorOf(id){ const P=players.get(id); return P?P.color:0xffffff; }
 function setTimer(){ $('timer').textContent='⏱ '+Math.max(0,Math.ceil(timeLeft)); }
 const MEDAL=['🥇','🥈','🥉'];
 function setBoard(){ const arr=[...players.values()].sort((a,b)=>b.score-a.score).slice(0,5);
-  $('board').innerHTML='<div class="ttl">LEADERBOARD</div>'+arr.map((p,i)=>`<div class="${p.id===myId?'me':''}">${MEDAL[i]||(i+1)+'.'} ${p.name} <b>${p.score}</b>${p.kills?' ☠'+p.kills:''}${p.wins?' 🏆'+p.wins:''}</div>`).join(''); }
+  $('board').innerHTML='<div class="ttl">LEADERBOARD</div>'+arr.map((p,i)=>`<div class="${p.id===myId?'me':''}">${MEDAL[i]||(i+1)+'.'} ${esc(p.name)} <b>${p.score|0}</b>${p.kills?' ☠'+(p.kills|0):''}${p.wins?' 🏆'+(p.wins|0):''}</div>`).join(''); }
 const BUFDUR={speed:5,shield:5,magnet:6,rapid:5,triple:5};
 function setBuffs(){ const t=now(); let h='';
   for(const k of ['speed','shield','magnet','rapid','triple']){ if(myBuff[k]>t){ const fr=Math.max(0,Math.min(1,(myBuff[k]-t)/BUFDUR[k]));
@@ -597,7 +602,7 @@ function setBuffs(){ const t=now(); let h='';
 function showScoreboard(on){ const el=$('scoreboard'); if(!on){ el.style.display='none'; return; } el.style.display='block';
   const arr=[...players.values()].sort((a,b)=>b.score-a.score);
   $('sbTable').innerHTML='<tr><th>#</th><th>NAME</th><th>SCORE</th><th>KILL</th><th>WIN</th></tr>'+
-    arr.map((p,i)=>`<tr class="${p.id===myId?'me':''}"><td>${i+1}</td><td>${p.name}</td><td>${p.score}</td><td>${p.kills||0}</td><td>${p.wins||0}</td></tr>`).join(''); }
+    arr.map((p,i)=>`<tr class="${p.id===myId?'me':''}"><td>${i+1}</td><td>${esc(p.name)}</td><td>${p.score|0}</td><td>${p.kills|0}</td><td>${p.wins|0}</td></tr>`).join(''); }
 function flash(txt,color='#fff'){ const f=$('flash'); f.textContent=txt; f.style.color=color; f.style.opacity=1; setTimeout(()=>f.style.opacity=0,900); }
 
 const PCOL={speed:0x3bf0ff,shield:0x55ff99,magnet:0xc06bff,rapid:0xff7a3b,triple:0xffe14f,heal:0xff5b86};
@@ -643,7 +648,7 @@ function broadcastRoster(){ const list=[...players.values()].map(P=>[P.id,P.name
 function hostDropGuest(id){ if(!players.has(id))return; guests.delete(id); const nm=players.get(id)?.name; removePlayerObj(id);
   broadcastRoster(); setBoard(); if(nm) flash(nm+' が退出',' #ffb45e'); }
 function onHostData(c,m){ lastRecv=now(); switch(m.t){
-  case 'join': makePlayerObj(c.peer,(m.name||'P').slice(0,10),m.color,false); guests.set(c.peer,c);
+  case 'join': makePlayerObj(c.peer,cleanName(m.name),(typeof m.color==='number'&&isFinite(m.color))?(m.color&0xffffff):0xffffff,false); guests.set(c.peer,c);
     broadcastRoster(); setBoard(); netstat('● '+players.size+'人接続中','#7CFC9A'); break;
   case 'leave': hostDropGuest(c.peer); break;
   case 'pos': { const P=players.get(c.peer); if(P){ P.target.x=m.x;P.target.y=m.y;P.target.z=m.z;P.target.r=m.r;P.hp=m.hp;P.dead=m.dead; } break; }
@@ -687,7 +692,8 @@ function onGuestData(m){ lastRecv=now(); switch(m.t){
 function applyRoster(list,stage,down,rt,wn){ if(rt) ROUND_TIME=rt; if(wn) WINS_NEEDED=wn;
   if(stage!=null && (stage!==curStage || !!down!==towerDown)){ const prevStage=curStage,prevDown=towerDown; buildStage(stage,down); if(prevStage===3&&stage===3&&down&&!prevDown){ collapseFx(); flash('💥 LEVOLUTION! タワー崩壊!','#ffcf66'); } } const ids=new Set(list.map(e=>e[0]));
   for(const id of [...players.keys()]) if(!ids.has(id) && id!==myId) removePlayerObj(id);
-  for(const [id,name,color,wins] of list){ let P=players.get(id); if(!P) P=makePlayerObj(id,name,color,id===myId);
+  for(let [id,name,color,wins] of list){ name=cleanName(name); color=(typeof color==='number'&&isFinite(color))?(color&0xffffff):0xffffff; wins=wins|0;
+    let P=players.get(id); if(!P) P=makePlayerObj(id,name,color,id===myId);
     P.name=name; P.wins=wins; if(!P.isLocal){ P.color=color; P.cube.material.color.setHex(color); P.cube.material.emissive.setHex(color); setLabel(P.cube.userData.lab,name,'#ffd0f0'); } }
   netstat('● '+players.size+'人プレイ中','#7CFC9A'); setBoard(); }
 function applySnap(m){ for(const e of m.P){ const P=players.get(e[0]); if(!P) continue;
@@ -697,6 +703,8 @@ function applySnap(m){ for(const e of m.P){ const P=players.get(e[0]); if(!P) co
 
 /* combat shared */
 function takeHit(kx,kz,dmg,from){ if(state!=='play'||now()<deadUntil||now()<invUntil) return;
+  // 相手から届く値は信用しない: 数値化＋上限クランプ（即死/吹っ飛ばしハック防止）
+  dmg=Math.max(0,Math.min(40,(+dmg)||0)); kx=Math.max(-4,Math.min(4,(+kx)||0)); kz=Math.max(-4,Math.min(4,(+kz)||0));
   lastHitBy=from; if(myBuff.shield>now()){ flash('🛡 ガード!','#66ffcc'); return; }
   me.position.x+=kx; me.position.z+=kz; myHP-=dmg; SFX.hurt(); shake=Math.max(shake,.4); redFlash();
   burst(me.position.x,me.position.y,me.position.z,0xff5555,12,7);
@@ -824,15 +832,15 @@ function dmgPopup(x,y,z,txt,color,size){ const v=new THREE.Vector3(x,y,z).projec
   $('dmgLayer').appendChild(sp); setTimeout(()=>sp.remove(),800); }
 function bigText(el,txt,ms){ el.textContent=txt; el.style.opacity=1; clearTimeout(el._tm); el._tm=setTimeout(()=>el.style.opacity=0,ms||900); }
 function killLog(killer,victim){ const k=players.get(killer),v=players.get(victim);
-  const d=document.createElement('div'); d.innerHTML=`<span style="color:#9ffcff">${k?k.name:'?'}</span> ▶ <span style="color:#ff8fd0">${v?v.name:'?'}</span>`;
+  const d=document.createElement('div'); d.innerHTML=`<span style="color:#9ffcff">${esc(k?k.name:'?')}</span> ▶ <span style="color:#ff8fd0">${esc(v?v.name:'?')}</span>`;
   const log=$('killlog'); log.appendChild(d); while(log.children.length>5) log.firstChild.remove(); setTimeout(()=>d.remove(),4500); }
 const STREAKS={3:'🔥 KILL STREAK',5:'⚡ DOMINATING',7:'☠ RAMPAGE',10:'👑 UNSTOPPABLE'};
 function onMyKill(){ myStreak++; if(STREAKS[myStreak]){ bigText($('streak'),STREAKS[myStreak],1400); shake=Math.max(shake,.6); } }
 function redFlash(){ const r=$('redflash'); r.style.opacity=.9; setTimeout(()=>r.style.opacity=0,60); }
 function showMVP(winId){ const P=players.get(winId); if(!P){ return; } const el=$('mvp');
   const acc=shotsFired?Math.round(shotsHit/shotsFired*100):0;
-  el.innerHTML=`<div class="crown">🏆</div><h3>ROUND WINNER</h3><div class="nm">${P.name}</div>
-    <div class="st">SCORE ${P.score+(P.id===winId?0:0)} ｜ ☠ ${P.kills||0} ｜ 🏆 ${P.wins||0}</div>
+  el.innerHTML=`<div class="crown">🏆</div><h3>ROUND WINNER</h3><div class="nm">${esc(P.name)}</div>
+    <div class="st">SCORE ${P.score|0} ｜ ☠ ${P.kills|0} ｜ 🏆 ${P.wins|0}</div>
     <div class="st">あなたの命中率 ${acc}%</div>`;
   el.style.display='block'; setTimeout(()=>el.style.display='none',2600); }
 const mmc=$('minimap').getContext('2d'); let mmT=0;
@@ -960,9 +968,10 @@ function grabProfile(){ myName=($('nameInput').value.trim()||(account?account.na
 function loadProfile(id){ try{ return Object.assign({score:0,kills:0,wins:0}, JSON.parse(localStorage.getItem('ca3d_prof_'+id)||'{}')); }catch(e){ return {score:0,kills:0,wins:0}; } }
 function saveProfile(){ if(account){ try{ localStorage.setItem('ca3d_prof_'+account.id, JSON.stringify(profile)); }catch(e){} if(fb) saveProfileRemote(); } }
 function renderProfile(){ const c=$('profCard'); if(!account){ c.style.display='none'; return; } c.style.display='flex';
-  const av = account.pic ? '<img src="'+account.pic+'" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">' : '<div class="av">'+(account.type==='google'?'G':'👤')+'</div>';
-  c.innerHTML = av + '<div class="pinfo"><b>'+(profile.gameId||account.name)+'</b><span>'+(account.type==='google'?'Google アカウント':'ゲスト')+'</span></div>'
-    + '<div class="pstats">★ '+profile.score+'<br>☠ '+profile.kills+' / 🏆 '+profile.wins+'</div>'
+  const pic = (account.pic && /^https:\/\//.test(account.pic)) ? account.pic : '';   // httpsのみ許可
+  const av = pic ? '<img src="'+esc(pic)+'" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">' : '<div class="av">'+(account.type==='google'?'G':'👤')+'</div>';
+  c.innerHTML = av + '<div class="pinfo"><b>'+esc(profile.gameId||account.name)+'</b><span>'+(account.type==='google'?'Google アカウント':'ゲスト')+'</span></div>'
+    + '<div class="pstats">★ '+(profile.score|0)+'<br>☠ '+(profile.kills|0)+' / 🏆 '+(profile.wins|0)+'</div>'
     + '<button id="acctSwitch">切替</button>';
   $('acctSwitch').onclick=()=>{ saveProfile(); account=null; $('menuStep').style.display='none'; $('authStep').style.display='block'; }; }
 function setAccount(type,id,name,pic){ account={type,id,name:(name||'Player').slice(0,10),pic:pic||''}; profile=loadProfile(id); lastMyScore=0;
@@ -993,7 +1002,10 @@ async function initFirebase(){ if(!FIREBASE_CONFIG.apiKey || location.protocol==
     const A0=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
     const A =await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
     const F =await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-    const app=A0.initializeApp(FIREBASE_CONFIG); fb={ app, auth:A.getAuth(app), db:F.getFirestore(app), A, F };
+    const app=A0.initializeApp(FIREBASE_CONFIG);
+    if(APPCHECK_SITE_KEY){ try{ const AC=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check.js');
+      AC.initializeAppCheck(app,{ provider:new AC.ReCaptchaV3Provider(APPCHECK_SITE_KEY), isTokenAutoRefreshEnabled:true }); }catch(e){ console.warn('AppCheck',e); } }
+    fb={ app, auth:A.getAuth(app), db:F.getFirestore(app), A, F };
     $('gbtnNote').style.display='none';
     A.onAuthStateChanged(fb.auth, u=>{ if(u) onFbUser(u); });
   }catch(e){ console.warn('Firebase init failed',e); fb=null; } }
@@ -1012,7 +1024,7 @@ async function openRanking(){ const o=$('rankOverlay'), list=$('rankList'); o.st
   list.innerHTML='読み込み中…';
   try{ const {collection,query,orderBy,limit,getDocs}=fb.F; const q=query(collection(fb.db,'users'),orderBy('score','desc'),limit(20));
     const snap=await getDocs(q); let h='<table><tr><th>#</th><th>ゲームID</th><th>SCORE</th><th>☠</th><th>🏆</th></tr>'; let i=1;
-    snap.forEach(d=>{ const u=d.data(); const me=account&&d.id===account.id; h+='<tr class="'+(me?'me':'')+'"><td>'+(i++)+'</td><td>'+((u.gameId||u.name||'?')+'')+'</td><td>'+(u.score|0)+'</td><td>'+(u.kills|0)+'</td><td>'+(u.wins|0)+'</td></tr>'; });
+    snap.forEach(d=>{ const u=d.data(); const me=account&&d.id===account.id; h+='<tr class="'+(me?'me':'')+'"><td>'+(i++)+'</td><td>'+esc(u.gameId||u.name||'?')+'</td><td>'+(u.score|0)+'</td><td>'+(u.kills|0)+'</td><td>'+(u.wins|0)+'</td></tr>'; });
     list.innerHTML = i>1? h+'</table>' : 'まだ記録がありません（プレイすると登録されます）';
   }catch(e){ list.innerHTML='<div style="font-size:13px;line-height:1.6">読み込み失敗:<br>'+(e&&e.message||e)+'<br><small>Firestoreのルール（read許可）/ Authで匿名・Googleを有効化 を確認してください</small></div>'; console.error('rank error',e); } }
 $('openRank').onclick=openRanking;
